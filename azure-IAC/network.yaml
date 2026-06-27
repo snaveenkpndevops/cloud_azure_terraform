@@ -1,0 +1,109 @@
+name: (NEW)Terraform Workflow - VNet NextGen Networking
+run-name: "NextGen Networking - Env: ${{ github.event.inputs.environment }} - Apply: ${{ github.event.inputs.terraform_apply }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options: [dev, tst, stg, prod]
+        default: dev
+      terraform_apply:
+        description: 'Run Terraform Apply?'
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-plan-apply:
+    runs-on: uhg-runner
+    environment: ${{ github.event.inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: 'network'
+
+    env:
+      TERRAFORM_VERSION: '1.14.3'
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      ARM_SUBSCRIPTION_ID: ${{ github.event.inputs.environment == 'prod' && secrets.PROD_SUBSCRIPTION_ID || '14b710f0-0020-4b63-887d-22a232c0324c' }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # ✅ Centralized ENV CONFIG
+      - name: Set Environment Configuration
+        id: config
+        run: |
+          if [[ "${{ env.ENVIRONMENT }}" == "prod" ]]; then
+            echo "ARM_SUBSCRIPTION_ID=${{ secrets.PROD_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=${{ secrets.PROD_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_id=${{ secrets.PROD_OAUTH_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_secret=${{ secrets.PROD_OAUTH_CLIENT_SECRET }}" >> $GITHUB_ENV
+          else
+            echo "ARM_SUBSCRIPTION_ID=14b710f0-0020-4b63-887d-22a232c0324c" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=181b97fb-a26e-47c2-9b67-d080763319df" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_id=${{ secrets.NONPROD_OAUTH_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_secret=${{ secrets.NONPROD_OAUTH_CLIENT_SECRET }}" >> $GITHUB_ENV
+          fi
+
+          echo "ARM_TENANT_ID=db05faca-c82a-4b9d-b9c5-0f64b6755421" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure JFrog Terraform Credentials
+        run: |
+          cat <<EOF > .terraformrc
+          provider_installation {
+            direct {
+              exclude = ["registry.terraform.io/*/*"]
+            }
+            network_mirror {
+              url = "https://centraluhg.jfrog.io/artifactory/api/terraform/glb-tf-provider-vir/providers/"
+            }
+          }
+          credentials "centraluhg.jfrog.io" {
+            token = "${{ secrets.JFROG_SAAS_TOKEN }}"
+          }
+          EOF
+          echo "TF_CLI_CONFIG_FILE=$(pwd)/.terraformrc" >> $GITHUB_ENV
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          git config --global url."https://oauth2:${{ secrets.GH_TOKEN }}@github.com".insteadOf https://github.com
+          terraform init -upgrade -backend-config="tfvars/${{ env.ENVIRONMENT }}-backend.tfvars"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: terraform_plan
+        run: |
+          terraform plan -lock=true -lock-timeout=30s -refresh=true \
+            -var-file="tfvars/${{ env.ENVIRONMENT }}.tfvars" \
+            -out=tfplan
+
+          terraform show -json tfplan > tfplan.json
+          terraform show tfplan > plan.txt
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.terraform_apply == 'true' }}
+        run: terraform apply -auto-approve tfplan

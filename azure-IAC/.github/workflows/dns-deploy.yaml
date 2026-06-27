@@ -1,0 +1,123 @@
+name: Terraform Workflow - Private DNS Zones
+run-name: "Private DNS - Subscription: ${{ github.event.inputs.subscription }} - Apply: ${{ github.event.inputs.terraform_apply }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      subscription:
+        description: 'Subscription scope (nonprod or prod)'
+        required: true
+        type: choice
+        options: [nonprod, prod]
+        default: nonprod
+      terraform_apply:
+        description: 'Run Terraform Apply?'
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-plan-apply:
+    runs-on: uhg-runner
+    environment: ${{ github.event.inputs.subscription }}
+
+    defaults:
+      run:
+        working-directory: 'network/dns'
+
+    env:
+      TERRAFORM_VERSION: '1.12.2'
+      SUBSCRIPTION: ${{ github.event.inputs.subscription }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set Environment Configuration
+        run: |
+          if [[ "${{ env.SUBSCRIPTION }}" == "prod" ]]; then
+            echo "ARM_SUBSCRIPTION_ID=${{ secrets.PROD_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=${{ secrets.PROD_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_id=${{ secrets.PROD_OAUTH_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_secret=${{ secrets.PROD_OAUTH_CLIENT_SECRET }}" >> $GITHUB_ENV
+          else
+            echo "ARM_SUBSCRIPTION_ID=14b710f0-0020-4b63-887d-22a232c0324c" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=da73cfa1-7cac-4dd9-bfe7-d1a83a053689" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_id=${{ secrets.NONPROD_OAUTH_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "TF_VAR_oauth_client_secret=${{ secrets.NONPROD_OAUTH_CLIENT_SECRET }}" >> $GITHUB_ENV
+          fi
+          echo "ARM_TENANT_ID=db05faca-c82a-4b9d-b9c5-0f64b6755421" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure JFrog Terraform Credentials
+        run: |
+          cat <<EOF > .terraformrc
+          provider_installation {
+            direct {
+              exclude = ["registry.terraform.io/*/*"]
+            }
+            network_mirror {
+              url = "https://centraluhg.jfrog.io/artifactory/api/terraform/glb-tf-provider-vir/providers/"
+            }
+          }
+          credentials "centraluhg.jfrog.io" {
+            token = "${{ secrets.JFROG_SAAS_TOKEN }}"
+          }
+          EOF
+          echo "TF_CLI_CONFIG_FILE=$(pwd)/.terraformrc" >> $GITHUB_ENV
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          git config --global url."https://oauth2:${{ secrets.GH_TOKEN }}@github.com".insteadOf https://github.com
+          terraform init -upgrade -backend-config="tfvars/${{ env.SUBSCRIPTION }}/backend.tfvars"
+
+            ## Import existing DNS zones into state (created accidentally by TST webapp run).
+
+      ## || true makes this idempotent — safe to re-run if already imported.
+      - name: Import Existing DNS Zones
+        run: |
+          terraform import \
+            -var-file="tfvars/${{ env.SUBSCRIPTION }}/values.tfvars" \
+            azurerm_private_dns_zone.webapp_dns \
+            /subscriptions/${{ env.ARM_SUBSCRIPTION_ID }}/resourceGroups/pc-managed-networking/providers/Microsoft.Network/privateDnsZones/privatelink.azurewebsites.net || true
+
+          terraform import \
+            -var-file="tfvars/${{ env.SUBSCRIPTION }}/values.tfvars" \
+            azurerm_private_dns_zone.kv_dns \
+            /subscriptions/${{ env.ARM_SUBSCRIPTION_ID }}/resourceGroups/pc-managed-networking/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net || true
+
+          terraform import \
+            -var-file="tfvars/${{ env.SUBSCRIPTION }}/values.tfvars" \
+            azurerm_private_dns_zone.storage_blob_dns \
+            /subscriptions/${{ env.ARM_SUBSCRIPTION_ID }}/resourceGroups/pc-managed-networking/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net || true
+
+          terraform import \
+            -var-file="tfvars/${{ env.SUBSCRIPTION }}/values.tfvars" \
+            azurerm_private_dns_zone.storage_file_dns \
+            /subscriptions/${{ env.ARM_SUBSCRIPTION_ID }}/resourceGroups/pc-managed-networking/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net || true
+
+      - name: Terraform Plan
+        run: |
+          terraform plan -lock=true -lock-timeout=30s \
+            -var-file="tfvars/${{ env.SUBSCRIPTION }}/values.tfvars" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.terraform_apply == 'true' }}
+        run: terraform apply -auto-approve tfplan

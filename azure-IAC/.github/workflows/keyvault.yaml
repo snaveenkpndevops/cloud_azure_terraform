@@ -1,0 +1,613 @@
+name: Key Vault - Seed Secrets
+run-name: "KV Seed - Env: ${{ github.event.inputs.environment }} - Webapp: ${{ github.event.inputs.webapp }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to target'
+        required: true
+        type: choice
+        options: [tst, stg, prod]
+        default: tst
+      webapp:
+        description: 'Which webapp KV to seed?'
+        required: true
+        type: choice
+        options: [quantam2_0, quantam, trackingapi, quantam_appservices, medicaappservice, all]
+        default: quantam2_0
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  seed-kv-secrets:
+    runs-on: uhg-runner
+    environment: ${{ github.event.inputs.environment }}
+
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      LOCATION: centralus
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # -------------------------------------------------------
+      # Set Azure credentials + derive KV names per environment
+      # KV names match webapp.tf: kv-{suffix}-{location}-{env}
+      # -------------------------------------------------------
+      - name: Set Environment Configuration
+        id: config
+        run: |
+          if [[ "${{ env.ENVIRONMENT }}" == "prod" ]]; then
+            echo "ARM_SUBSCRIPTION_ID=${{ secrets.PROD_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=${{ secrets.PROD_CLIENT_ID }}"             >> $GITHUB_ENV
+          else
+            echo "ARM_SUBSCRIPTION_ID=14b710f0-0020-4b63-887d-22a232c0324c" >> $GITHUB_ENV
+            echo "ARM_CLIENT_ID=da73cfa1-7cac-4dd9-bfe7-d1a83a053689"       >> $GITHUB_ENV
+          fi
+          echo "ARM_TENANT_ID=db05faca-c82a-4b9d-b9c5-0f64b6755421" >> $GITHUB_ENV
+          echo "KV_QUANTAM2_0=kv-qtm2-${{ env.LOCATION }}-${{ env.ENVIRONMENT }}"     >> $GITHUB_ENV
+          echo "KV_QUANTAM=kv-qtmweb-${{ env.LOCATION }}-${{ env.ENVIRONMENT }}"      >> $GITHUB_ENV
+          echo "KV_TRACKINGAPI=kv-qtmtapi-${{ env.LOCATION }}-${{ env.ENVIRONMENT }}" >> $GITHUB_ENV
+          echo "KV_APPSVC=kv-appsvc-${{ env.ENVIRONMENT }}"                            >> $GITHUB_ENV
+          echo "KV_MEDICA=kv-medica-${{ env.ENVIRONMENT }}"                           >> $GITHUB_ENV
+      # -------------------------------------------------------
+      # Map env-prefixed repo secrets → generic QUANTAM2_* env vars
+      # Repo secrets follow naming: {ENV}_QUANTAM2_{SECRET}
+      # e.g. TST_QUANTAM2_DB_USER, STG_QUANTAM2_DB_USER, PROD_QUANTAM2_DB_USER
+      # -------------------------------------------------------
+      - name: Map Environment Secrets to Generic Vars
+        env:
+          # TST
+          TST_DB_USER:                  ${{ secrets.TST_QUANTAM2_DB_USER }}
+          TST_DB_PWD:                   ${{ secrets.TST_QUANTAM2_DB_PWD }}
+          TST_DB_SERVER:                ${{ secrets.TST_QUANTAM2_DB_SERVER }}
+          TST_DB_NAME:                  ${{ secrets.TST_QUANTAM2_DB_NAME }}
+          TST_NAS_ENDPOINT_URL:         ${{ secrets.TST_QUANTAM2_NAS_ENDPOINT_URL }}
+          TST_NAS_USER_ID:              ${{ secrets.TST_QUANTAM2_NAS_USER_ID }}
+          TST_NAS_USER_PASSWORD:        ${{ secrets.TST_QUANTAM2_NAS_USER_PASSWORD }}
+          TST_NAS_BASE_PATH:            ${{ secrets.TST_QUANTAM2_NAS_BASE_PATH }}
+          TST_QUANTAM_API_NAS_URL:      ${{ secrets.TST_QUANTAM2_QUANTAM_API_NAS_URL }}
+          TST_SNOW_FLAKE_KEY:           ${{ secrets.TST_QUANTAM2_SNOW_FLAKE_KEY }}
+          TST_FALLBACK_APPROVER_EMAIL:  ${{ secrets.TST_QUANTAM2_FALLBACK_APPROVER_EMAIL }}
+          TST_SQL_REQUEST_TIMEOUT:      ${{ secrets.TST_QUANTAM2_SQL_REQUEST_TIMEOUT }}
+          TST_TRACKINGAPI_WEBTRAX_CONN:  ${{ secrets.TST_TRACKINGAPI_WEBTRAX_CONN }}
+          TST_TRACKINGAPI_API_KEY_0:     ${{ secrets.TST_TRACKINGAPI_API_KEY_0 }}
+          TST_TRACKINGAPI_API_KEY_1:     ${{ secrets.TST_TRACKINGAPI_API_KEY_1 }}
+          TST_TRACKINGAPI_API_KEY_2:     ${{ secrets.TST_TRACKINGAPI_API_KEY_2 }}
+          # TST — quantam-web secrets
+          TST_QUANTAM_WEB_CONN_STR:              ${{ secrets.TST_QUANTAM_WEB_CONN_STR }}
+          TST_QUANTAM_WEB_CONN_STR_FACETS:       ${{ secrets.TST_QUANTAM_WEB_CONN_STR_FACETS }}
+          TST_QUANTAM_WEB_CONN_STR_AGATE:        ${{ secrets.TST_QUANTAM_WEB_CONN_STR_AGATE }}
+          TST_QUANTAM_WEB_FCRMIDAS_CONN:         ${{ secrets.TST_QUANTAM_WEB_FCRMIDAS_CONN }}
+          TST_QUANTAM_WEB_IFALLS_UBH_CONN:       ${{ secrets.TST_QUANTAM_WEB_IFALLS_UBH_CONN }}
+          TST_QUANTAM_WEB_SQL_SERVER:            ${{ secrets.TST_QUANTAM_WEB_SQL_SERVER }}
+          TST_QUANTAM_WEB_TRACKER_USER_KEY:      ${{ secrets.TST_QUANTAM_WEB_TRACKER_USER_KEY }}
+          TST_QUANTAM_WEB_IF_UBH:                ${{ secrets.TST_QUANTAM_WEB_IF_UBH }}
+          TST_QUANTAM_WEB_NAS_USERNAME:          ${{ secrets.TST_QUANTAM_WEB_NAS_USERNAME }}
+          TST_QUANTAM_WEB_NAS_PASSWORD:          ${{ secrets.TST_QUANTAM_WEB_NAS_PASSWORD }}
+          TST_QUANTAM_WEB_TIME_TRACKER_URI:      ${{ vars.TST_QUANTAM_WEB_TIME_TRACKER_URI }}
+          TST_QUANTAM_WEB_QUANTAM2_URL:          ${{ vars.TST_QUANTAM_WEB_QUANTAM2_URL }}
+
+          # TST — medicaappservice secrets (SMTP is anonymous relay — no credentials needed)
+          TST_MEDICA_DB_SERVER:        ${{ secrets.TST_MEDICA_DB_SERVER }}
+          TST_MEDICA_DB_NAME:          ${{ secrets.TST_MEDICA_DB_NAME }}
+          TST_MEDICA_DB_USER:          ${{ secrets.TST_MEDICA_DB_USER }}
+          TST_MEDICA_DB_PASSWORD:      ${{ secrets.TST_MEDICA_DB_PASSWORD }}
+          TST_MEDICA_NAS_USER:         ${{ secrets.TST_MEDICA_NAS_USER }}
+          TST_MEDICA_NAS_PASSWORD:     ${{ secrets.TST_MEDICA_NAS_PASSWORD }}
+
+          # TST - quantamserviceapis (quantam_appservices)
+          TST_APPSVC_WEBTRAX_CONN:          ${{ secrets.TST_APPSVC_WEBTRAX_CONN }}
+          TST_APPSVC_WEBTRAX_STAGE_CONN:    ${{ secrets.TST_APPSVC_WEBTRAX_STAGE_CONN }}
+          TST_APPSVC_JANUS_CONN:            ${{ secrets.TST_APPSVC_JANUS_CONN }}
+          TST_APPSVC_NICE_CONN:             ${{ secrets.TST_APPSVC_NICE_CONN }}
+          TST_APPSVC_FACETS_CONN:           ${{ secrets.TST_APPSVC_FACETS_CONN }}
+          TST_APPSVC_SNOWFLAKE_CONN:        ${{ secrets.TST_APPSVC_SNOWFLAKE_CONN }}
+          TST_APPSVC_SNOWFLAKE_RSA_KEY:     ${{ secrets.TST_APPSVC_SNOWFLAKE_RSA_KEY }}
+          TST_APPSVC_NAS_USER:              ${{ secrets.TST_APPSVC_NAS_USER }}
+          TST_APPSVC_NAS_PASSWORD:          ${{ secrets.TST_APPSVC_NAS_PASSWORD }}
+          TST_APPSVC_NICE_USERNAME:         ${{ secrets.TST_APPSVC_NICE_USERNAME }}
+          TST_APPSVC_NICE_PASSWORD:         ${{ secrets.TST_APPSVC_NICE_PASSWORD }}
+          TST_APPSVC_NICE_BASIC_AUTH_TOKEN: ${{ secrets.TST_APPSVC_NICE_BASIC_AUTH_TOKEN }}
+
+          # STG
+          STG_DB_USER:                  ${{ secrets.STG_QUANTAM2_DB_USER }}
+          STG_DB_PWD:                   ${{ secrets.STG_QUANTAM2_DB_PWD }}
+          STG_DB_SERVER:                ${{ secrets.STG_QUANTAM2_DB_SERVER }}
+          STG_DB_NAME:                  ${{ secrets.STG_QUANTAM2_DB_NAME }}
+          STG_NAS_ENDPOINT_URL:         ${{ secrets.STG_QUANTAM2_NAS_ENDPOINT_URL }}
+          STG_NAS_USER_ID:              ${{ secrets.STG_QUANTAM2_NAS_USER_ID }}
+          STG_NAS_USER_PASSWORD:        ${{ secrets.STG_QUANTAM2_NAS_USER_PASSWORD }}
+          STG_NAS_BASE_PATH:            ${{ secrets.STG_QUANTAM2_NAS_BASE_PATH }}
+          STG_QUANTAM_API_NAS_URL:      ${{ secrets.STG_QUANTAM2_QUANTAM_API_NAS_URL }}
+          STG_SNOW_FLAKE_KEY:           ${{ secrets.STG_QUANTAM2_SNOW_FLAKE_KEY }}
+          STG_FALLBACK_APPROVER_EMAIL:  ${{ secrets.STG_QUANTAM2_FALLBACK_APPROVER_EMAIL }}
+          STG_SQL_REQUEST_TIMEOUT:      ${{ secrets.STG_QUANTAM2_SQL_REQUEST_TIMEOUT }}
+          STG_TRACKINGAPI_WEBTRAX_CONN:  ${{ secrets.STG_TRACKINGAPI_WEBTRAX_CONN }}
+          STG_TRACKINGAPI_API_KEY_0:     ${{ secrets.STG_TRACKINGAPI_API_KEY_0 }}
+          STG_TRACKINGAPI_API_KEY_1:     ${{ secrets.STG_TRACKINGAPI_API_KEY_1 }}
+          STG_TRACKINGAPI_API_KEY_2:     ${{ secrets.STG_TRACKINGAPI_API_KEY_2 }}
+          # STG — quantam-web secrets
+          STG_QUANTAM_WEB_CONN_STR:              ${{ secrets.STG_QUANTAM_WEB_CONN_STR }}
+          STG_QUANTAM_WEB_CONN_STR_FACETS:       ${{ secrets.STG_QUANTAM_WEB_CONN_STR_FACETS }}
+          STG_QUANTAM_WEB_CONN_STR_AGATE:        ${{ secrets.STG_QUANTAM_WEB_CONN_STR_AGATE }}
+          STG_QUANTAM_WEB_FCRMIDAS_CONN:         ${{ secrets.STG_QUANTAM_WEB_FCRMIDAS_CONN }}
+          STG_QUANTAM_WEB_IFALLS_UBH_CONN:       ${{ secrets.STG_QUANTAM_WEB_IFALLS_UBH_CONN }}
+          STG_QUANTAM_WEB_SQL_SERVER:            ${{ secrets.STG_QUANTAM_WEB_SQL_SERVER }}
+          STG_QUANTAM_WEB_TRACKER_USER_KEY:      ${{ secrets.STG_QUANTAM_WEB_TRACKER_USER_KEY }}
+          STG_QUANTAM_WEB_IF_UBH:                ${{ secrets.STG_QUANTAM_WEB_IF_UBH }}
+          STG_QUANTAM_WEB_NAS_USERNAME:          ${{ secrets.STG_QUANTAM_WEB_NAS_USERNAME }}
+          STG_QUANTAM_WEB_NAS_PASSWORD:          ${{ secrets.STG_QUANTAM_WEB_NAS_PASSWORD }}
+          STG_QUANTAM_WEB_TIME_TRACKER_URI:      ${{ vars.STG_QUANTAM_WEB_TIME_TRACKER_URI }}
+          STG_QUANTAM_WEB_QUANTAM2_URL:          ${{ vars.STG_QUANTAM_WEB_QUANTAM2_URL }}
+
+          # STG — medicaappservice secrets (SMTP is anonymous relay — no credentials needed)
+          STG_MEDICA_DB_SERVER:        ${{ secrets.STG_MEDICA_DB_SERVER }}
+          STG_MEDICA_DB_NAME:          ${{ secrets.STG_MEDICA_DB_NAME }}
+          STG_MEDICA_DB_USER:          ${{ secrets.STG_MEDICA_DB_USER }}
+          STG_MEDICA_DB_PASSWORD:      ${{ secrets.STG_MEDICA_DB_PASSWORD }}
+          STG_MEDICA_NAS_USER:         ${{ secrets.STG_MEDICA_NAS_USER }}
+          STG_MEDICA_NAS_PASSWORD:     ${{ secrets.STG_MEDICA_NAS_PASSWORD }}
+
+          # STG - quantamserviceapis (quantam_appservices)
+          STG_APPSVC_WEBTRAX_CONN:          ${{ secrets.STG_APPSVC_WEBTRAX_CONN }}
+          STG_APPSVC_WEBTRAX_STAGE_CONN:    ${{ secrets.STG_APPSVC_WEBTRAX_STAGE_CONN }}
+          STG_APPSVC_JANUS_CONN:            ${{ secrets.STG_APPSVC_JANUS_CONN }}
+          STG_APPSVC_NICE_CONN:             ${{ secrets.STG_APPSVC_NICE_CONN }}
+          STG_APPSVC_FACETS_CONN:           ${{ secrets.STG_APPSVC_FACETS_CONN }}
+          STG_APPSVC_SNOWFLAKE_CONN:        ${{ secrets.STG_APPSVC_SNOWFLAKE_CONN }}
+          STG_APPSVC_SNOWFLAKE_RSA_KEY:     ${{ secrets.STG_APPSVC_SNOWFLAKE_RSA_KEY }}
+          STG_APPSVC_NAS_USER:              ${{ secrets.STG_APPSVC_NAS_USER }}
+          STG_APPSVC_NAS_PASSWORD:          ${{ secrets.STG_APPSVC_NAS_PASSWORD }}
+          STG_APPSVC_NICE_USERNAME:         ${{ secrets.STG_APPSVC_NICE_USERNAME }}
+          STG_APPSVC_NICE_PASSWORD:         ${{ secrets.STG_APPSVC_NICE_PASSWORD }}
+          STG_APPSVC_NICE_BASIC_AUTH_TOKEN: ${{ secrets.STG_APPSVC_NICE_BASIC_AUTH_TOKEN }}
+
+          # PROD
+          PROD_DB_USER:                 ${{ secrets.PROD_QUANTAM2_DB_USER }}
+          PROD_DB_PWD:                  ${{ secrets.PROD_QUANTAM2_DB_PWD }}
+          PROD_DB_SERVER:               ${{ secrets.PROD_QUANTAM2_DB_SERVER }}
+          PROD_DB_NAME:                 ${{ secrets.PROD_QUANTAM2_DB_NAME }}
+          PROD_NAS_ENDPOINT_URL:        ${{ secrets.PROD_QUANTAM2_NAS_ENDPOINT_URL }}
+          PROD_NAS_USER_ID:             ${{ secrets.PROD_QUANTAM2_NAS_USER_ID }}
+          PROD_NAS_USER_PASSWORD:       ${{ secrets.PROD_QUANTAM2_NAS_USER_PASSWORD }}
+          PROD_NAS_BASE_PATH:           ${{ secrets.PROD_QUANTAM2_NAS_BASE_PATH }}
+          PROD_QUANTAM_API_NAS_URL:     ${{ secrets.PROD_QUANTAM2_QUANTAM_API_NAS_URL }}
+          PROD_SNOW_FLAKE_KEY:          ${{ secrets.PROD_QUANTAM2_SNOW_FLAKE_KEY }}
+          PROD_FALLBACK_APPROVER_EMAIL: ${{ secrets.PROD_QUANTAM2_FALLBACK_APPROVER_EMAIL }}
+          PROD_SQL_REQUEST_TIMEOUT:     ${{ secrets.PROD_QUANTAM2_SQL_REQUEST_TIMEOUT }}
+          PROD_TRACKINGAPI_WEBTRAX_CONN: ${{ secrets.PROD_TRACKINGAPI_WEBTRAX_CONN }}
+          PROD_TRACKINGAPI_API_KEY_0:    ${{ secrets.PROD_TRACKINGAPI_API_KEY_0 }}
+          PROD_TRACKINGAPI_API_KEY_1:    ${{ secrets.PROD_TRACKINGAPI_API_KEY_1 }}
+          PROD_TRACKINGAPI_API_KEY_2:    ${{ secrets.PROD_TRACKINGAPI_API_KEY_2 }}
+          # PROD — quantam-web secrets
+          PROD_QUANTAM_WEB_CONN_STR:              ${{ secrets.PROD_QUANTAM_WEB_CONN_STR }}
+          PROD_QUANTAM_WEB_CONN_STR_FACETS:       ${{ secrets.PROD_QUANTAM_WEB_CONN_STR_FACETS }}
+          PROD_QUANTAM_WEB_CONN_STR_AGATE:        ${{ secrets.PROD_QUANTAM_WEB_CONN_STR_AGATE }}
+          PROD_QUANTAM_WEB_FCRMIDAS_CONN:         ${{ secrets.PROD_QUANTAM_WEB_FCRMIDAS_CONN }}
+          PROD_QUANTAM_WEB_IFALLS_UBH_CONN:       ${{ secrets.PROD_QUANTAM_WEB_IFALLS_UBH_CONN }}
+          PROD_QUANTAM_WEB_SQL_SERVER:            ${{ secrets.PROD_QUANTAM_WEB_SQL_SERVER }}
+          PROD_QUANTAM_WEB_TRACKER_USER_KEY:      ${{ secrets.PROD_QUANTAM_WEB_TRACKER_USER_KEY }}
+          PROD_QUANTAM_WEB_IF_UBH:                ${{ secrets.PROD_QUANTAM_WEB_IF_UBH }}
+          PROD_QUANTAM_WEB_NAS_USERNAME:          ${{ secrets.PROD_QUANTAM_WEB_NAS_USERNAME }}
+          PROD_QUANTAM_WEB_NAS_PASSWORD:          ${{ secrets.PROD_QUANTAM_WEB_NAS_PASSWORD }}
+          PROD_QUANTAM_WEB_TIME_TRACKER_URI:      ${{ vars.PROD_QUANTAM_WEB_TIME_TRACKER_URI }}
+          PROD_QUANTAM_WEB_QUANTAM2_URL:          ${{ vars.PROD_QUANTAM_WEB_QUANTAM2_URL }}
+
+          # PROD — medicaappservice secrets (SMTP is anonymous relay — no credentials needed)
+          PROD_MEDICA_DB_SERVER:       ${{ secrets.PROD_MEDICA_DB_SERVER }}
+          PROD_MEDICA_DB_NAME:         ${{ secrets.PROD_MEDICA_DB_NAME }}
+          PROD_MEDICA_DB_USER:         ${{ secrets.PROD_MEDICA_DB_USER }}
+          PROD_MEDICA_DB_PASSWORD:     ${{ secrets.PROD_MEDICA_DB_PASSWORD }}
+          PROD_MEDICA_NAS_USER:        ${{ secrets.PROD_MEDICA_NAS_USER }}
+          PROD_MEDICA_NAS_PASSWORD:    ${{ secrets.PROD_MEDICA_NAS_PASSWORD }}
+
+          # PROD - quantamserviceapis (quantam_appservices)
+          PROD_APPSVC_WEBTRAX_CONN:          ${{ secrets.PROD_APPSVC_WEBTRAX_CONN }}
+          PROD_APPSVC_WEBTRAX_STAGE_CONN:    ${{ secrets.PROD_APPSVC_WEBTRAX_STAGE_CONN }}
+          PROD_APPSVC_JANUS_CONN:            ${{ secrets.PROD_APPSVC_JANUS_CONN }}
+          PROD_APPSVC_NICE_CONN:             ${{ secrets.PROD_APPSVC_NICE_CONN }}
+          PROD_APPSVC_FACETS_CONN:           ${{ secrets.PROD_APPSVC_FACETS_CONN }}
+          PROD_APPSVC_SNOWFLAKE_CONN:        ${{ secrets.PROD_APPSVC_SNOWFLAKE_CONN }}
+          PROD_APPSVC_SNOWFLAKE_RSA_KEY:     ${{ secrets.PROD_APPSVC_SNOWFLAKE_RSA_KEY }}
+          PROD_APPSVC_NAS_USER:              ${{ secrets.PROD_APPSVC_NAS_USER }}
+          PROD_APPSVC_NAS_PASSWORD:          ${{ secrets.PROD_APPSVC_NAS_PASSWORD }}
+          PROD_APPSVC_NICE_USERNAME:         ${{ secrets.PROD_APPSVC_NICE_USERNAME }}
+          PROD_APPSVC_NICE_PASSWORD:         ${{ secrets.PROD_APPSVC_NICE_PASSWORD }}
+          PROD_APPSVC_NICE_BASIC_AUTH_TOKEN: ${{ secrets.PROD_APPSVC_NICE_BASIC_AUTH_TOKEN }}
+          
+        run: |
+          ENV=$(echo "${{ env.ENVIRONMENT }}" | tr '[:lower:]' '[:upper:]')
+          case "$ENV" in
+            TST)
+              echo "QUANTAM2_DB_USER=$TST_DB_USER"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_DB_PWD=$TST_DB_PWD"                                   >> $GITHUB_ENV
+              echo "QUANTAM2_DB_SERVER=$TST_DB_SERVER"                             >> $GITHUB_ENV
+              echo "QUANTAM2_DB_NAME=$TST_DB_NAME"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_ENDPOINT_URL=$TST_NAS_ENDPOINT_URL"               >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_ID=$TST_NAS_USER_ID"                         >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_PASSWORD=$TST_NAS_USER_PASSWORD"             >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_BASE_PATH=$TST_NAS_BASE_PATH"                     >> $GITHUB_ENV
+              echo "QUANTAM2_QUANTAM_API_NAS_URL=$TST_QUANTAM_API_NAS_URL"         >> $GITHUB_ENV
+              {
+                echo "QUANTAM2_SNOW_FLAKE_KEY<<SNOW_FLAKE_EOF"
+                echo "$TST_SNOW_FLAKE_KEY"
+                echo "SNOW_FLAKE_EOF"
+              } >> $GITHUB_ENV
+              echo "QUANTAM2_FALLBACK_APPROVER_EMAIL=$TST_FALLBACK_APPROVER_EMAIL" >> $GITHUB_ENV
+              echo "QUANTAM2_SQL_REQUEST_TIMEOUT=$TST_SQL_REQUEST_TIMEOUT"         >> $GITHUB_ENV
+              echo "TRACKINGAPI_WEBTRAX_CONN=$TST_TRACKINGAPI_WEBTRAX_CONN" >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_0=$TST_TRACKINGAPI_API_KEY_0"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_1=$TST_TRACKINGAPI_API_KEY_1"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_2=$TST_TRACKINGAPI_API_KEY_2"       >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR=$TST_QUANTAM_WEB_CONN_STR"                         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_FACETS=$TST_QUANTAM_WEB_CONN_STR_FACETS"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_AGATE=$TST_QUANTAM_WEB_CONN_STR_AGATE"             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_FCRMIDAS_CONN=$TST_QUANTAM_WEB_FCRMIDAS_CONN"               >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IFALLS_UBH_CONN=$TST_QUANTAM_WEB_IFALLS_UBH_CONN"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_SQL_SERVER=$TST_QUANTAM_WEB_SQL_SERVER"                     >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TRACKER_USER_KEY=$TST_QUANTAM_WEB_TRACKER_USER_KEY"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IF_UBH=$TST_QUANTAM_WEB_IF_UBH"                             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_USERNAME=$TST_QUANTAM_WEB_NAS_USERNAME"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_PASSWORD=$TST_QUANTAM_WEB_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TIME_TRACKER_URI=$TST_QUANTAM_WEB_TIME_TRACKER_URI"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_QUANTAM2_URL=$TST_QUANTAM_WEB_QUANTAM2_URL"                 >> $GITHUB_ENV
+              # Medicaappservice variables
+              echo "MEDICA_DB_SERVER=$TST_MEDICA_DB_SERVER"           >> $GITHUB_ENV
+              echo "MEDICA_DB_NAME=$TST_MEDICA_DB_NAME"               >> $GITHUB_ENV
+              echo "MEDICA_DB_USER=$TST_MEDICA_DB_USER"               >> $GITHUB_ENV
+              echo "MEDICA_DB_PASSWORD=$TST_MEDICA_DB_PASSWORD"       >> $GITHUB_ENV
+              echo "MEDICA_NAS_USER=$TST_MEDICA_NAS_USER"             >> $GITHUB_ENV
+              echo "MEDICA_NAS_PASSWORD=$TST_MEDICA_NAS_PASSWORD"     >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_CONN=$TST_APPSVC_WEBTRAX_CONN"                 >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_STAGE_CONN=$TST_APPSVC_WEBTRAX_STAGE_CONN"     >> $GITHUB_ENV
+              echo "APPSVC_JANUS_CONN=$TST_APPSVC_JANUS_CONN"                     >> $GITHUB_ENV
+              echo "APPSVC_NICE_CONN=$TST_APPSVC_NICE_CONN"                       >> $GITHUB_ENV
+              echo "APPSVC_FACETS_CONN=$TST_APPSVC_FACETS_CONN"                   >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_CONN=$TST_APPSVC_SNOWFLAKE_CONN"             >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_RSA_KEY=$TST_APPSVC_SNOWFLAKE_RSA_KEY"       >> $GITHUB_ENV
+              echo "APPSVC_NAS_USER=$TST_APPSVC_NAS_USER"                         >> $GITHUB_ENV
+              echo "APPSVC_NAS_PASSWORD=$TST_APPSVC_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "APPSVC_NICE_USERNAME=$TST_APPSVC_NICE_USERNAME"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_PASSWORD=$TST_APPSVC_NICE_PASSWORD"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_BASIC_AUTH_TOKEN=$TST_APPSVC_NICE_BASIC_AUTH_TOKEN" >> $GITHUB_ENV
+              # Non-sensitive quantam-web values are now plain vars in tfvars (no env mapping needed)
+              ;;
+            STG)
+              echo "QUANTAM2_DB_USER=$STG_DB_USER"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_DB_PWD=$STG_DB_PWD"                                   >> $GITHUB_ENV
+              echo "QUANTAM2_DB_SERVER=$STG_DB_SERVER"                             >> $GITHUB_ENV
+              echo "QUANTAM2_DB_NAME=$STG_DB_NAME"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_ENDPOINT_URL=$STG_NAS_ENDPOINT_URL"               >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_ID=$STG_NAS_USER_ID"                         >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_PASSWORD=$STG_NAS_USER_PASSWORD"             >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_BASE_PATH=$STG_NAS_BASE_PATH"                     >> $GITHUB_ENV
+              echo "QUANTAM2_QUANTAM_API_NAS_URL=$STG_QUANTAM_API_NAS_URL"         >> $GITHUB_ENV
+              {
+                echo "QUANTAM2_SNOW_FLAKE_KEY<<SNOW_FLAKE_EOF"
+                echo "$STG_SNOW_FLAKE_KEY"
+                echo "SNOW_FLAKE_EOF"
+              } >> $GITHUB_ENV
+              echo "QUANTAM2_FALLBACK_APPROVER_EMAIL=$STG_FALLBACK_APPROVER_EMAIL" >> $GITHUB_ENV
+              echo "QUANTAM2_SQL_REQUEST_TIMEOUT=$STG_SQL_REQUEST_TIMEOUT"         >> $GITHUB_ENV
+              echo "TRACKINGAPI_WEBTRAX_CONN=$STG_TRACKINGAPI_WEBTRAX_CONN" >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_0=$STG_TRACKINGAPI_API_KEY_0"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_1=$STG_TRACKINGAPI_API_KEY_1"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_2=$STG_TRACKINGAPI_API_KEY_2"       >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR=$STG_QUANTAM_WEB_CONN_STR"                         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_FACETS=$STG_QUANTAM_WEB_CONN_STR_FACETS"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_AGATE=$STG_QUANTAM_WEB_CONN_STR_AGATE"             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_FCRMIDAS_CONN=$STG_QUANTAM_WEB_FCRMIDAS_CONN"               >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IFALLS_UBH_CONN=$STG_QUANTAM_WEB_IFALLS_UBH_CONN"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_SQL_SERVER=$STG_QUANTAM_WEB_SQL_SERVER"                     >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TRACKER_USER_KEY=$STG_QUANTAM_WEB_TRACKER_USER_KEY"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IF_UBH=$STG_QUANTAM_WEB_IF_UBH"                             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_USERNAME=$STG_QUANTAM_WEB_NAS_USERNAME"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_PASSWORD=$STG_QUANTAM_WEB_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TIME_TRACKER_URI=$STG_QUANTAM_WEB_TIME_TRACKER_URI"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_QUANTAM2_URL=$STG_QUANTAM_WEB_QUANTAM2_URL"                 >> $GITHUB_ENV
+              # Medicaappservice variables
+              echo "MEDICA_DB_SERVER=$STG_MEDICA_DB_SERVER"           >> $GITHUB_ENV
+              echo "MEDICA_DB_NAME=$STG_MEDICA_DB_NAME"               >> $GITHUB_ENV
+              echo "MEDICA_DB_USER=$STG_MEDICA_DB_USER"               >> $GITHUB_ENV
+              echo "MEDICA_DB_PASSWORD=$STG_MEDICA_DB_PASSWORD"       >> $GITHUB_ENV
+              echo "MEDICA_NAS_USER=$STG_MEDICA_NAS_USER"             >> $GITHUB_ENV
+              echo "MEDICA_NAS_PASSWORD=$STG_MEDICA_NAS_PASSWORD"     >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_CONN=$STG_APPSVC_WEBTRAX_CONN"                 >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_STAGE_CONN=$STG_APPSVC_WEBTRAX_STAGE_CONN"     >> $GITHUB_ENV
+              echo "APPSVC_JANUS_CONN=$STG_APPSVC_JANUS_CONN"                     >> $GITHUB_ENV
+              echo "APPSVC_NICE_CONN=$STG_APPSVC_NICE_CONN"                       >> $GITHUB_ENV
+              echo "APPSVC_FACETS_CONN=$STG_APPSVC_FACETS_CONN"                   >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_CONN=$STG_APPSVC_SNOWFLAKE_CONN"             >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_RSA_KEY=$STG_APPSVC_SNOWFLAKE_RSA_KEY"       >> $GITHUB_ENV
+              echo "APPSVC_NAS_USER=$STG_APPSVC_NAS_USER"                         >> $GITHUB_ENV
+              echo "APPSVC_NAS_PASSWORD=$STG_APPSVC_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "APPSVC_NICE_USERNAME=$STG_APPSVC_NICE_USERNAME"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_PASSWORD=$STG_APPSVC_NICE_PASSWORD"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_BASIC_AUTH_TOKEN=$STG_APPSVC_NICE_BASIC_AUTH_TOKEN" >> $GITHUB_ENV
+              # Non-sensitive quantam-web values are now plain vars in tfvars (no env mapping needed)
+              ;;
+            PROD)
+              echo "QUANTAM2_DB_USER=$PROD_DB_USER"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_DB_PWD=$PROD_DB_PWD"                                   >> $GITHUB_ENV
+              echo "QUANTAM2_DB_SERVER=$PROD_DB_SERVER"                             >> $GITHUB_ENV
+              echo "QUANTAM2_DB_NAME=$PROD_DB_NAME"                                 >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_ENDPOINT_URL=$PROD_NAS_ENDPOINT_URL"               >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_ID=$PROD_NAS_USER_ID"                         >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_USER_PASSWORD=$PROD_NAS_USER_PASSWORD"             >> $GITHUB_ENV
+              echo "QUANTAM2_NAS_BASE_PATH=$PROD_NAS_BASE_PATH"                     >> $GITHUB_ENV
+              echo "QUANTAM2_QUANTAM_API_NAS_URL=$PROD_QUANTAM_API_NAS_URL"         >> $GITHUB_ENV
+              {
+                echo "QUANTAM2_SNOW_FLAKE_KEY<<SNOW_FLAKE_EOF"
+                echo "$PROD_SNOW_FLAKE_KEY"
+                echo "SNOW_FLAKE_EOF"
+              } >> $GITHUB_ENV
+              echo "QUANTAM2_FALLBACK_APPROVER_EMAIL=$PROD_FALLBACK_APPROVER_EMAIL" >> $GITHUB_ENV
+              echo "QUANTAM2_SQL_REQUEST_TIMEOUT=$PROD_SQL_REQUEST_TIMEOUT"         >> $GITHUB_ENV
+              echo "TRACKINGAPI_WEBTRAX_CONN=$PROD_TRACKINGAPI_WEBTRAX_CONN" >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_0=$PROD_TRACKINGAPI_API_KEY_0"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_1=$PROD_TRACKINGAPI_API_KEY_1"       >> $GITHUB_ENV
+              echo "TRACKINGAPI_API_KEY_2=$PROD_TRACKINGAPI_API_KEY_2"       >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR=$PROD_QUANTAM_WEB_CONN_STR"                         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_FACETS=$PROD_QUANTAM_WEB_CONN_STR_FACETS"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_CONN_STR_AGATE=$PROD_QUANTAM_WEB_CONN_STR_AGATE"             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_FCRMIDAS_CONN=$PROD_QUANTAM_WEB_FCRMIDAS_CONN"               >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IFALLS_UBH_CONN=$PROD_QUANTAM_WEB_IFALLS_UBH_CONN"           >> $GITHUB_ENV
+              echo "QUANTAM_WEB_SQL_SERVER=$PROD_QUANTAM_WEB_SQL_SERVER"                     >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TRACKER_USER_KEY=$PROD_QUANTAM_WEB_TRACKER_USER_KEY"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_IF_UBH=$PROD_QUANTAM_WEB_IF_UBH"                             >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_USERNAME=$PROD_QUANTAM_WEB_NAS_USERNAME"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_NAS_PASSWORD=$PROD_QUANTAM_WEB_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "QUANTAM_WEB_TIME_TRACKER_URI=$PROD_QUANTAM_WEB_TIME_TRACKER_URI"         >> $GITHUB_ENV
+              echo "QUANTAM_WEB_QUANTAM2_URL=$PROD_QUANTAM_WEB_QUANTAM2_URL"                 >> $GITHUB_ENV
+              # Medicaappservice variables
+              echo "MEDICA_DB_SERVER=$PROD_MEDICA_DB_SERVER"           >> $GITHUB_ENV
+              echo "MEDICA_DB_NAME=$PROD_MEDICA_DB_NAME"               >> $GITHUB_ENV
+              echo "MEDICA_DB_USER=$PROD_MEDICA_DB_USER"               >> $GITHUB_ENV
+              echo "MEDICA_DB_PASSWORD=$PROD_MEDICA_DB_PASSWORD"       >> $GITHUB_ENV
+              echo "MEDICA_NAS_USER=$PROD_MEDICA_NAS_USER"             >> $GITHUB_ENV
+              echo "MEDICA_NAS_PASSWORD=$PROD_MEDICA_NAS_PASSWORD"     >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_CONN=$PROD_APPSVC_WEBTRAX_CONN"                 >> $GITHUB_ENV
+              echo "APPSVC_WEBTRAX_STAGE_CONN=$PROD_APPSVC_WEBTRAX_STAGE_CONN"     >> $GITHUB_ENV
+              echo "APPSVC_JANUS_CONN=$PROD_APPSVC_JANUS_CONN"                     >> $GITHUB_ENV
+              echo "APPSVC_NICE_CONN=$PROD_APPSVC_NICE_CONN"                       >> $GITHUB_ENV
+              echo "APPSVC_FACETS_CONN=$PROD_APPSVC_FACETS_CONN"                   >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_CONN=$PROD_APPSVC_SNOWFLAKE_CONN"             >> $GITHUB_ENV
+              echo "APPSVC_SNOWFLAKE_RSA_KEY=$PROD_APPSVC_SNOWFLAKE_RSA_KEY"       >> $GITHUB_ENV
+              echo "APPSVC_NAS_USER=$PROD_APPSVC_NAS_USER"                         >> $GITHUB_ENV
+              echo "APPSVC_NAS_PASSWORD=$PROD_APPSVC_NAS_PASSWORD"                 >> $GITHUB_ENV
+              echo "APPSVC_NICE_USERNAME=$PROD_APPSVC_NICE_USERNAME"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_PASSWORD=$PROD_APPSVC_NICE_PASSWORD"               >> $GITHUB_ENV
+              echo "APPSVC_NICE_BASIC_AUTH_TOKEN=$PROD_APPSVC_NICE_BASIC_AUTH_TOKEN" >> $GITHUB_ENV
+              # Non-sensitive quantam-web values are now plain vars in tfvars (no env mapping needed)
+              ;;
+          esac
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      # -------------------------------------------------------
+      # quantam2_0 → kv-qtm2-centralus-{env}
+      # Secrets seeded from QUANTAM2_* env vars (resolved above)
+      # -------------------------------------------------------
+      - name: Seed Secrets - quantam2_0 (kv-qtm2-centralus-${{ env.ENVIRONMENT }})
+        if: ${{ github.event.inputs.webapp == 'quantam2_0' || github.event.inputs.webapp == 'all' }}
+        env:
+          _KV:           ${{ env.KV_QUANTAM2_0 }}
+          _DB_USER:      ${{ env.QUANTAM2_DB_USER }}
+          _DB_PWD:       ${{ env.QUANTAM2_DB_PWD }}
+          _DB_SERVER:    ${{ env.QUANTAM2_DB_SERVER }}
+          _DB_NAME:      ${{ env.QUANTAM2_DB_NAME }}
+          _NAS_URL:      ${{ env.QUANTAM2_NAS_ENDPOINT_URL }}
+          _NAS_USER:     ${{ env.QUANTAM2_NAS_USER_ID }}
+          _NAS_PASS:     ${{ env.QUANTAM2_NAS_USER_PASSWORD }}
+          _NAS_PATH:     ${{ env.QUANTAM2_NAS_BASE_PATH }}
+          _API_NAS_URL:  ${{ env.QUANTAM2_QUANTAM_API_NAS_URL }}
+          _SNOW_KEY:     ${{ env.QUANTAM2_SNOW_FLAKE_KEY }}
+          _FALLBACK_EMAIL: ${{ env.QUANTAM2_FALLBACK_APPROVER_EMAIL }}
+          _SQL_TIMEOUT:  ${{ env.QUANTAM2_SQL_REQUEST_TIMEOUT }}
+        run: |
+          KV="$_KV"
+          echo "Seeding secrets into: $KV"
+          # Helper: skip secrets with empty values (GitHub secret not yet set)
+          kv_set() {
+            local name="$1" value="$2"
+            if [ -z "$value" ]; then
+              echo "SKIP: $name (empty — GitHub secret not set)"
+            else
+              az keyvault secret set --vault-name "$KV" --name "$name" --value "$value"
+            fi
+          }
+          kv_set "DB-USER"                 "$_DB_USER"
+          kv_set "DB-PWD"                  "$_DB_PWD"
+          kv_set "DB-SERVER"               "$_DB_SERVER"
+          kv_set "DB-NAME"                 "$_DB_NAME"
+          kv_set "NAS-ENDPOINT-URL"        "$_NAS_URL"
+          kv_set "NAS-USER-ID"             "$_NAS_USER"
+          kv_set "NAS-USER-PASSWORD"       "$_NAS_PASS"
+          kv_set "NAS-BASE-PATH"           "$_NAS_PATH"
+          kv_set "QUANTAM-API-NAS-URL"     "$_API_NAS_URL"
+          kv_set "Snow-Flake-Key"          "$_SNOW_KEY"
+          kv_set "FALLBACK-APPROVER-EMAIL" "$_FALLBACK_EMAIL"
+          kv_set "Sql-Request-Timeout"     "$_SQL_TIMEOUT"
+          echo "Done seeding $KV"
+      # -------------------------------------------------------
+      # quantam → kv-qtmweb-centralus-{env}
+      # Secrets seeded from QUANTAM_WEB_* env vars (resolved above)
+      # -------------------------------------------------------
+      - name: Seed Secrets - quantam (kv-qtmweb-centralus-${{ env.ENVIRONMENT }})
+        if: ${{ github.event.inputs.webapp == 'quantam' || github.event.inputs.webapp == 'all' }}
+        env:
+          _KV:              ${{ env.KV_QUANTAM }}
+          _CONN_STR:        ${{ env.QUANTAM_WEB_CONN_STR }}
+          _CMCFACETS_CONN:  ${{ env.QUANTAM_WEB_CONN_STR_FACETS }}
+          _AGATE_CONN:      ${{ env.QUANTAM_WEB_CONN_STR_AGATE }}
+          _FCRMIDAS_CONN:   ${{ env.QUANTAM_WEB_FCRMIDAS_CONN }}
+          _IFALLS_UBH_CONN: ${{ env.QUANTAM_WEB_IFALLS_UBH_CONN }}
+          _SQL_SERVER:      ${{ env.QUANTAM_WEB_SQL_SERVER }}
+          _TRACKER_KEY:     ${{ env.QUANTAM_WEB_TRACKER_USER_KEY }}
+          _IF_UBH:          ${{ env.QUANTAM_WEB_IF_UBH }}
+          _NAS_USER:        ${{ env.QUANTAM_WEB_NAS_USERNAME }}
+          _NAS_PASS:        ${{ env.QUANTAM_WEB_NAS_PASSWORD }}
+        run: |
+          KV="$_KV"
+          echo "Seeding secrets into: $KV"
+          # Helper: skip secrets with empty values (GitHub secret not yet set)
+          kv_set() {
+            local name="$1" value="$2"
+            if [ -z "$value" ]; then
+              echo "SKIP: $name (empty — GitHub secret not set)"
+            else
+              az keyvault secret set --vault-name "$KV" --name "$name" --value "$value"
+            fi
+          }
+          # Connection strings (contain passwords — always KV)
+          kv_set "WebTrax-ConnectionString"    "$_CONN_STR"
+          kv_set "CMCFacets-ConnectionString"  "$_CMCFACETS_CONN"
+          kv_set "Agate-ConnectionString"      "$_AGATE_CONN"
+          kv_set "FCR-MIDAS-ConnectionString"  "$_FCRMIDAS_CONN"
+          kv_set "Ifalls-UBH-ConnectionString" "$_IFALLS_UBH_CONN"
+          # Secrets — credentials / API keys
+          kv_set "SQL-Server"        "$_SQL_SERVER"
+          kv_set "TrackerUserKey"    "$_TRACKER_KEY"
+          kv_set "IF-UBH"            "$_IF_UBH"
+          kv_set "NasUploadUsername" "$_NAS_USER"
+          kv_set "NasUploadPassword" "$_NAS_PASS"
+          # NOTE: SSRS_WTX, SSRS_Prod, OPS2URL, WTXDBEnviroment, ChartImageHandler,
+          # DisableEmailEnv, ErrorLogFallbackPath are NON-SENSITIVE — plain vars in tfvars.
+          # TimeTrackerUri and Quantam2.0Url are set directly on the webapp below (not KV).
+          echo "Done seeding $KV"
+      # -------------------------------------------------------
+      # Push custom domain URLs directly to quantam-web App Service
+      # Values come from GitHub Environment Variables (vars.*)
+      # Runs after KV seed so it always overrides Terraform defaults.
+      # -------------------------------------------------------
+      - name: Update App Settings - quantam-web (custom domain URLs)
+        if: ${{ github.event.inputs.webapp == 'quantam' || github.event.inputs.webapp == 'all' }}
+        env:
+          _TIME_TRACKER: ${{ env.QUANTAM_WEB_TIME_TRACKER_URI }}
+          _QTM2_URL:     ${{ env.QUANTAM_WEB_QUANTAM2_URL }}
+        run: |
+          WEBAPP="ase-quantam-web-${{ env.LOCATION }}-${{ env.ENVIRONMENT }}"
+          echo "Resolving resource group for: $WEBAPP"
+          RG=$(az webapp list --query "[?name=='$WEBAPP'].resourceGroup" -o tsv)
+          if [ -z "$RG" ]; then
+            echo "ERROR: Could not find webapp '$WEBAPP' in subscription"
+            exit 1
+          fi
+          echo "Setting app settings on: $WEBAPP (RG: $RG)"
+          az webapp config appsettings set \
+            --resource-group "$RG" \
+            --name "$WEBAPP" \
+            --settings \
+              "TimeTrackerUri=$_TIME_TRACKER" \
+              "Quantam2.0Url=$_QTM2_URL"
+          echo "Done updating app settings on $WEBAPP"
+
+      # -------------------------------------------------------
+      # trackingapi → kv-qtmtapi-centralus-{env}
+      # TODO: add trackingapi-specific secrets when app is configured
+      # -------------------------------------------------------
+      - name: Seed Secrets - trackingapi (kv-qtmtapi-centralus-${{ env.ENVIRONMENT }})
+        if: ${{ github.event.inputs.webapp == 'trackingapi' || github.event.inputs.webapp == 'all' }}
+        env:
+          _KV:       ${{ env.KV_TRACKINGAPI }}
+          _CONN:     ${{ env.TRACKINGAPI_WEBTRAX_CONN }}
+          _KEY_0:    ${{ env.TRACKINGAPI_API_KEY_0 }}
+          _KEY_1:    ${{ env.TRACKINGAPI_API_KEY_1 }}
+          _KEY_2:    ${{ env.TRACKINGAPI_API_KEY_2 }}
+        run: |
+          KV="$_KV"
+          echo "Seeding secrets into: $KV"
+          az keyvault secret set --vault-name "$KV" --name "WebTrax-ConnectionString" --value "$_CONN"
+          az keyvault secret set --vault-name "$KV" --name "ApiKey-0"                 --value "$_KEY_0"
+          az keyvault secret set --vault-name "$KV" --name "ApiKey-1"                 --value "$_KEY_1"
+          az keyvault secret set --vault-name "$KV" --name "ApiKey-2"                 --value "$_KEY_2"
+          echo "Done seeding $KV"
+
+      # -------------------------------------------------------
+      # quantam_appservices -> kv-appsvc-{env}
+      # quantamserviceapis secrets and connection strings
+      # -------------------------------------------------------
+      - name: Seed Secrets - quantam_appservices (kv-appsvc-${{ env.ENVIRONMENT }})
+        if: ${{ github.event.inputs.webapp == 'quantam_appservices' || github.event.inputs.webapp == 'all' }}
+        env:
+          _KV:                     ${{ env.KV_APPSVC }}
+          _WEBTRAX_CONN:           ${{ env.APPSVC_WEBTRAX_CONN }}
+          _WEBTRAX_STAGE_CONN:     ${{ env.APPSVC_WEBTRAX_STAGE_CONN }}
+          _JANUS_CONN:             ${{ env.APPSVC_JANUS_CONN }}
+          _NICE_CONN:              ${{ env.APPSVC_NICE_CONN }}
+          _FACETS_CONN:            ${{ env.APPSVC_FACETS_CONN }}
+          _SNOWFLAKE_CONN:         ${{ env.APPSVC_SNOWFLAKE_CONN }}
+          _SNOWFLAKE_RSA_KEY:      ${{ env.APPSVC_SNOWFLAKE_RSA_KEY }}
+          _NAS_USER:               ${{ env.APPSVC_NAS_USER }}
+          _NAS_PASSWORD:           ${{ env.APPSVC_NAS_PASSWORD }}
+          _NICE_USERNAME:          ${{ env.APPSVC_NICE_USERNAME }}
+          _NICE_PASSWORD:          ${{ env.APPSVC_NICE_PASSWORD }}
+          _NICE_BASIC_AUTH_TOKEN:  ${{ env.APPSVC_NICE_BASIC_AUTH_TOKEN }}
+        run: |
+          KV="$_KV"
+          echo "Seeding secrets into: $KV"
+          kv_set() {
+            local name="$1" value="$2"
+            if [ -z "$value" ]; then
+              echo "SKIP: $name (empty - GitHub secret not set)"
+            else
+              az keyvault secret set --vault-name "$KV" --name "$name" --value "$value"
+            fi
+          }
+          kv_set "WebTrax-ConnectionString"            "$_WEBTRAX_CONN"
+          kv_set "WebTrax-Stage-ConnectionString"      "$_WEBTRAX_STAGE_CONN"
+          kv_set "Janus-ConnectionString"              "$_JANUS_CONN"
+          kv_set "Nice-ConnectionString"               "$_NICE_CONN"
+          kv_set "Facets-ConnectionString"             "$_FACETS_CONN"
+          kv_set "SnowflakeHighmark-ConnectionString"  "$_SNOWFLAKE_CONN"
+          kv_set "SnoWFlake-Rsa-Key"                   "$_SNOWFLAKE_RSA_KEY"
+          kv_set "Nas-User"                            "$_NAS_USER"
+          kv_set "Nas-Password"                        "$_NAS_PASSWORD"
+          kv_set "Nice-Username"                       "$_NICE_USERNAME"
+          kv_set "Nice-Password"                       "$_NICE_PASSWORD"
+          kv_set "Nice-Basic-Auth-Token"               "$_NICE_BASIC_AUTH_TOKEN"
+          echo "Done seeding $KV"
+
+      # -------------------------------------------------------
+      # medicaappservice → kv-medica-{env}
+      # Secrets seeded from MEDICA_* env vars (resolved above)
+      # -------------------------------------------------------
+      - name: Seed Secrets - medicaappservice (kv-medica-${{ env.ENVIRONMENT }})
+        if: ${{ github.event.inputs.webapp == 'medicaappservice' || github.event.inputs.webapp == 'all' }}
+        env:
+          _KV:              ${{ env.KV_MEDICA }}
+          _DB_SERVER:       ${{ env.MEDICA_DB_SERVER }}
+          _DB_NAME:         ${{ env.MEDICA_DB_NAME }}
+          _DB_USER:         ${{ env.MEDICA_DB_USER }}
+          _DB_PASSWORD:     ${{ env.MEDICA_DB_PASSWORD }}
+          _NAS_USER:        ${{ env.MEDICA_NAS_USER }}
+          _NAS_PASSWORD:    ${{ env.MEDICA_NAS_PASSWORD }}
+        run: |
+          KV="$_KV"
+          echo "Seeding secrets into: $KV"
+          # Helper: skip secrets with empty values (GitHub secret not yet set)
+          kv_set() {
+            local name="$1" value="$2"
+            if [ -z "$value" ]; then
+              echo "SKIP: $name (empty — GitHub secret not set)"
+            else
+              az keyvault secret set --vault-name "$KV" --name "$name" --value "$value"
+            fi
+          }
+          # Build connection string — Azure SQL format with encryption & timeouts
+          CONN_STR="Server=$_DB_SERVER,1433;Database=$_DB_NAME;User Id=$_DB_USER;Password=$_DB_PASSWORD;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+          kv_set "Medica-ConnectionString"  "$CONN_STR"
+          # NAS file share credentials (SMTP is anonymous relay — no credentials needed)
+          kv_set "NAS-USER"                 "$_NAS_USER"
+          kv_set "NAS-PASSWORD"             "$_NAS_PASSWORD"
+          echo "Done seeding $KV"
+      

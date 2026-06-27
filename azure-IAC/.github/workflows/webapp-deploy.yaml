@@ -1,0 +1,112 @@
+name: Terraform Workflow - Azure Web App
+run-name: "App Service - Env: ${{ github.event.inputs.environment }} - Apply: ${{ github.event.inputs.terraform_apply }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options: [tst, stg, prod]
+        default: tst
+      terraform_apply:
+        description: 'Run Terraform Apply?'
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  pull-requests: write
+  issues: write
+  deployments: read
+
+jobs:
+  ## -------------------------------------------------------
+  ## Resolves per-environment backend config and PCAM ID
+  ## EPL workflow_call inputs cannot reference files directly,
+  ## so discrete values are passed as job outputs.
+  ## -------------------------------------------------------
+  setup:
+    runs-on: uhg-runner
+    outputs:
+      backend-resource-group:  ${{ steps.config.outputs.backend-resource-group }}
+      backend-storage-account: ${{ steps.config.outputs.backend-storage-account }}
+      backend-container:       ${{ steps.config.outputs.backend-container }}
+      backend-key:             ${{ steps.config.outputs.backend-key }}
+      pcam-resource-id:        ${{ steps.config.outputs.pcam-resource-id }}
+    steps:
+      - name: Resolve Environment Configuration
+        id: config
+        run: |
+          case "${{ github.event.inputs.environment }}" in
+            tst)
+              echo "backend-resource-group=dcdca658-tfstate-rg-cus-np"  >> $GITHUB_OUTPUT
+              echo "backend-storage-account=dcdca658tfstatecusnp"        >> $GITHUB_OUTPUT
+              echo "backend-container=tfstate"                           >> $GITHUB_OUTPUT
+              echo "backend-key=terraform-asp-tst.tfstate"               >> $GITHUB_OUTPUT
+              echo "pcam-resource-id=quantam-cloud-c7ffa72/cloud-account.v2/azu-quantam-nonprod-cloud" >> $GITHUB_OUTPUT
+              ;;
+            stg)
+              echo "backend-resource-group=dcdca658-tfstate-rg-cus-np"  >> $GITHUB_OUTPUT
+              echo "backend-storage-account=dcdca658tfstatecusnp"        >> $GITHUB_OUTPUT
+              echo "backend-container=tfstate"                                      >> $GITHUB_OUTPUT
+              echo "backend-key=terraform-asp-stg.tfstate"                          >> $GITHUB_OUTPUT
+              echo "pcam-resource-id=quantam-cloud-c7ffa72/cloud-account.v2/azu-quantam-nonprod-cloud" >> $GITHUB_OUTPUT
+              ;;
+            prod)
+              # TODO: populate PROD_BACKEND_RG / PROD_BACKEND_SA / PROD_PCAM_RESOURCE_ID secrets
+              echo "backend-resource-group=${{ secrets.PROD_BACKEND_RG }}"  >> $GITHUB_OUTPUT
+              echo "backend-storage-account=${{ secrets.PROD_BACKEND_SA }}" >> $GITHUB_OUTPUT
+              echo "backend-container=tfstate"                              >> $GITHUB_OUTPUT
+              echo "backend-key=terraform-asp-prod.tfstate"                 >> $GITHUB_OUTPUT
+              echo "pcam-resource-id=${{ secrets.PROD_PCAM_RESOURCE_ID }}"  >> $GITHUB_OUTPUT
+              ;;
+          esac
+  ## -------------------------------------------------------
+  ## Terraform Plan — EPL reusable workflow
+  ## Uses Vaulted SP via pcam-resource-id (resolves 403 on
+  ## cross-subscription privateDnsZones/join/action)
+  ## -------------------------------------------------------
+  plan:
+    needs: setup
+    uses: uhg-pipelines/privileged-workflows/.github/workflows/terraform-plan.yaml@v3
+    secrets: inherit
+    with:
+      terraform-working-directory: webapp
+      backend-type: azurerm
+      pcam-resource-id: ${{ needs.setup.outputs.pcam-resource-id }}
+      tenant-version: v2
+      terraform-version: '1.12.2'
+      terraform-vars-files: tfvars/${{ github.event.inputs.environment }}/values.tfvars
+      azurerm-backend-resource-group-name: ${{ needs.setup.outputs.backend-resource-group }}
+      azurerm-backend-storage-account-name: ${{ needs.setup.outputs.backend-storage-account }}
+      azurerm-backend-container-name: ${{ needs.setup.outputs.backend-container }}
+      azurerm-backend-key: ${{ needs.setup.outputs.backend-key }}
+      github-environment: ${{ github.event.inputs.environment }}
+
+  ## -------------------------------------------------------
+  ## Terraform Apply — EPL reusable workflow
+  ## Only runs when terraform_apply == true.
+  ## Waits for plan job to succeed before applying.
+  ## Re-runs init+plan+apply internally (no JFrog artifact).
+  ## -------------------------------------------------------
+  apply:
+    needs: [setup, plan]
+    if: ${{ github.event.inputs.terraform_apply == 'true' }}
+    uses: uhg-pipelines/privileged-workflows/.github/workflows/terraform-apply.yaml@v3
+    secrets: inherit
+    with:
+      terraform-working-directory: webapp
+      backend-type: azurerm
+      pcam-resource-id: ${{ needs.setup.outputs.pcam-resource-id }}
+      tenant-version: v2
+      terraform-version: '1.12.2'
+      terraform-vars-files: tfvars/${{ github.event.inputs.environment }}/values.tfvars
+      azurerm-backend-resource-group-name: ${{ needs.setup.outputs.backend-resource-group }}
+      azurerm-backend-storage-account-name: ${{ needs.setup.outputs.backend-storage-account }}
+      azurerm-backend-container-name: ${{ needs.setup.outputs.backend-container }}
+      azurerm-backend-key: ${{ needs.setup.outputs.backend-key }}
+      github-environment: ${{ github.event.inputs.environment }}
