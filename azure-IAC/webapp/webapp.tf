@@ -329,20 +329,6 @@ resource "azurerm_windows_web_app" "app" {
 
   app_settings = local.webapp_app_settings[each.key]
 
-#  app_settings = {
-#    "APPINSIGHTS_INSTRUMENTATIONKEY"             = azurerm_application_insights.insights[each.key].instrumentation_key
-#    "APPLICATIONINSIGHTS_CONNECTION_STRING"      = azurerm_application_insights.insights[each.key].connection_string
-#    "ApplicationInsightsAgent_EXTENSION_VERSION" = "~2"
-#    "XDT_MicrosoftApplicationInsights_Mode"      = "default"
-    ## WEBTRAX APP CONFIG (COMMENTED – NOT DELETED will change values for quantam app)
-
-    ## "ChartImageHandler"                          = "storage=file;timeout=20;"
-    ## "OPS2URL"                                    = "http://ops2-test.mhars1.optum.com"
-    ## "SQL_Server"                                 = "server=webtrax-test-db.optum.com;user id=optmops;password=#$zH4[EaCGDmXGMx;database=WebTrax"
-    ## "SSRS_WTX"                                   = "http://orbit-ssrs-test-int.optum.com/ReportServer"
-    ## "WTXDBEnviroment"                            = "WebTrax Test Server"
-#  }
-
   ## Connection strings — must be set via connection_string{} blocks, not app_settings.
   ## Azure rejects SQLCONNSTR_*/CUSTOMCONNSTR_* in app_settings (HTTP 400).
   dynamic "connection_string" {
@@ -368,13 +354,6 @@ resource "azurerm_windows_web_app" "app" {
     ## WEBTRAX SECURITY (DISABLED FOR PHASE‑1)
     ip_restriction_default_action = "Deny"
 
-
-
-
-    # application_stack {
-    #   current_stack  = "dotnet"
-    #   dotnet_version = "v4.0"
-    # }
 
     application_stack {
       current_stack  = each.key == "quantam2_0" ? "node"   : "dotnet"
