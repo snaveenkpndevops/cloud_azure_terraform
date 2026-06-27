@@ -1,2 +1,2 @@
 ##
-**Quantam - Infrastructure Repo**
+**Azure - Infrastructure Repo**
